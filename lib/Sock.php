@@ -59,7 +59,7 @@ class Sock{
   }
 
   public function read(?Address &$addr = null): ?string{
-    socket_recvfrom($this->socket, $data, 1024 * 2, 0, $address, $port);
+    @socket_recvfrom($this->socket, $data, 1024 * 2, 0, $address, $port);
 
     if(!$data)
       return null;

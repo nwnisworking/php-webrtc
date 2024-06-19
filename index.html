@@ -55,7 +55,7 @@
           this.#addCandidates(offer.candidates)
           this.rtc.createAnswer(option).then(async answer=>{
             this.rtc.setLocalDescription(answer)
-            res({...answer.toJSON(), candidates : await this.#candidates()})
+            res({...answer, candidates : await this.#candidates()})
           })
         })
       }

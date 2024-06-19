@@ -123,6 +123,46 @@ class Message{
     return null;
   }
 
+  // This is a working code, just that I need to find the use of it
+  public function integrity(string $password, ?string $user = null, ?string $realm = null): string{
+    $user??= $this->getAttribute(Attr::USERNAME)->getData() ?? '';
+    $realm??= $this->getAttribute(Attr::REALM)->getData() ?? '';
+    $md5 = md5("$user:$realm:$password", true);
+    $msg = clone $this;
+
+    $msg->removeAttributes();
+
+    foreach($this->getAttributes() as $attr){
+      if($attr->getType() === Attr::MESSAGE_INTEGRITY) break;
+      $msg->addAttribute($attr);
+    }
+
+    $size = 24 + $msg->getLength();
+    $msg = (string) $msg;
+    $msg[2] = chr(($size >> 8) & 0xff);
+    $msg[3] = chr($size & 0xff);
+
+    return hash_hmac('sha1', $msg, $md5, true);
+  }
+
+  public function fingerprint(){
+    $msg = clone $this;
+    $msg->removeAttributes();
+
+    foreach($this->attributes as $attr){
+      if($attr->getType() === Attr::FINGERPRINT)
+        break;
+      $msg->addAttribute($attr);
+    }
+
+    $size = $msg->getLength() + 8;
+    $msg = (string) $this;
+    $msg[2] = chr(($size >> 8) & 0xff);
+    $msg[3] = chr($size & 0xff);
+    
+    return pack('N', crc32($msg)) ^ 'STUN';
+  }
+
   public function __tostring(){
     return pack('nna*', $this->type, $this->length, $this->cookie.$this->id.join('', $this->attributes));
   }

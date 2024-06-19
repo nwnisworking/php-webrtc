@@ -68,7 +68,7 @@ readonly class Attribute{
 
         return [
           'protocol'=>$protocol, 
-          'address'=>new Address($ip, ord($port[0]) << 8 | ord($port[1]))
+          'address'=>new Address(inet_ntop($ip), ord($port[0]) << 8 | ord($port[1]))
         ];
       case Attr::DATA : 
         return new Message($this->raw_data);
@@ -128,6 +128,13 @@ readonly class Attribute{
     return new self(pack('nna*', Attr::SOFTWARE->value, strlen($name), $name));
   }
 
+  public static function MessageIntegrity(string $integrity): self{
+    return new self(pack('nna*', Attr::MESSAGE_INTEGRITY->value, strlen($integrity), $integrity));
+  }
+
+  public static function Fingerprint(string $fingerprint): self{
+    return new self(pack('nna*', Attr::FINGERPRINT->value, strlen($fingerprint), $fingerprint));
+  }
 
   private static function XORAddress(Address $address, Message $message): string{
     $mask = $message->getCookie().$message->getId();

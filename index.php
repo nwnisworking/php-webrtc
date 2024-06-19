@@ -28,78 +28,68 @@ $master
 ->bind();
 
 $sockets = [];
+
 $sockets[] = [
   'socket'=>$master,
-  'expires'=>null, 
-  'client_addr'=>null, 
-  'server_addr'=>$master->getAddress()
+  'user_address'=>null,
+  'expires'=>null
 ];
 
-$i = -1;
+$i = 0;
+function &s_log(string $str){
+  static $logs = [];
 
-$a = new Address('127.0.0.1', 34);
-$av = new Address('127.0.0.1', 34);
+  if(isset($logs[0]) && $logs[array_key_last($logs)] === $str)
+    return $logs;
 
-function listening(){
-  global $sockets;
+  $logs[] = $str;
 
-  return array_map(fn($e)=>"$e[server_addr] > $e[client_addr]", $sockets);
+  echo $str.PHP_EOL;
+  return $logs;
 }
-
 while(1){
   $i++;
   $i%= count($sockets);
 
   [
     'socket'=>$socket,
-    'expires'=>$expires,
-    'client_addr'=>$c_addr,
-    'server_addr'=>$s_addr
+    'user_address'=>$user_address,
+    'expires'=>$expires
   ] = $sockets[$i];
 
-  # Lifetime expires through refresh request or actual
+  s_log('Total sockets: '.count($sockets));
+
   if(!is_null($expires) && time() > $expires){
     array_splice($sockets, $i, 1);
     $i--;
     continue;
   }
 
-  # Nothing to read, continue on
-  if(!$socket || empty($data = $socket->read($addr))){
+  if(!$socket || empty($data = $socket->read($addr)))
     continue;
-  }
-
-  echo "$s_addr > $addr\n";
-  // echo join(PHP_EOL, listening()).PHP_EOL.PHP_EOL;
 
   $msg = new Message($data);
   $res = clone $msg;
   $res->setClass(Type::RESPONSE);
 
-  echo $msg->getMethod()->name."\n\n";
-
   switch($msg->getMethod()){
     case Method::BINDING : 
-      $username = $res->getAttributes(Attr::USERNAME);
-      $fingerprint = $res->getAttributes(Attr::FINGERPRINT)?->getData($res)['data'];
-      $msg_int = $res->getAttributes(Attr::MESSAGE_INTEGRITY)?->getData($res);
-      $res->removeAttributes();
+      if($res->getAttribute(Attr::XOR_MAPPED_ADDRESS)){
+        $res->removeAttributes();
+      
+        $res->addAttribute(
+          // Attribute::Software(),
+        );
+      }
 
+      
       $res->addAttribute(Attribute::XORMappedAddress($addr, $res));
 
-      if($msg_int){
-        $md5 = md5("$username::password");
-        $prev_len = $msg_int['length'];
-        
-      }      
-    break;
+      break;
     case Method::ALLOCATE : 
       $res->removeAttributes();
       $relay = new Sock(new Address($addr->ip), 'udp');
-      $relay
-      ->setReuseAddr(true)
-      ->setBlock()
-      ->bind();
+      $relay->setReuseAddr(true)->setBlock()->bind();
 
       $res->addAttribute(
         Attribute::XORRelayedAddress($relay->getAddress(), $res),
@@ -110,38 +100,38 @@ while(1){
 
       $sockets[] = [
         'socket'=>$relay,
-        'expires'=>time() + 600,
-        'client_addr'=>$addr,
-        'server_addr'=>$relay->getAddress()
+        'user_address'=>$addr,
+        'expires'=>time() + 600
       ];
-    break;
+      break;
     case Method::REFRESH : 
       $res->removeAttributes();
 
-      foreach($sockets as &$meta)
-        if($meta['client_addr'] == $addr)
+      s_log('refresh');
+
+      foreach($sockets as &$meta){
+        if($meta['user_address'] == $addr)
           $meta['expires'] = 0;
-
-      continue 2;
-    break;
+      }
+      break;
     case Method::CREATE_PERMISSION : 
-      $res
-      ->removeAttributes()
-      ->addAttribute(Attribute::Software('php-webrtc'));
-    break;
+      $res->removeAttributes();
+      $res->addAttribute(Attribute::Software('php-webrtc'));
+      break;
     case Method::SEND : 
-      $peer_addr = $res->getAttributes(Attr::XOR_PEER_ADDRESS)->getData($res)['data'];
-      $res_msg = $res->getAttributes(Attr::DATA)->getData($res)['data'];
+      $peer = $res->getAttribute(Attr::XOR_PEER_ADDRESS)->getData($res);
+      $res = $res->getAttribute(Attr::DATA)->getData($res);
 
-      $a = array_filter($sockets, fn($e)=>$e['client_addr'] == $addr);
-      $a = current($a);
+      foreach($sockets as $sock){
+        if($sock['user_address'] == $addr){
+          $socket = $sock['socket'];
+          $addr = $peer['address'];
+          break;
+        }
+      }
 
-      $a['socket']->send($res_msg, $peer_addr['addr']);
+      break;
+  }
 
-      continue 2;
-    break;
-  } 
-
-  $master->send($res, $addr);
-  sleep(1);
+  $socket->send($res, $addr);
 }

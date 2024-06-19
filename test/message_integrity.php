@@ -28,15 +28,6 @@ $str = "010800282112a4425448484e646c726f44507647802200096e6f64652d7475726e000000
 $msg = new Message(hex2bin($str));
 $test = clone $msg;
 
-$test->removeAttributes();
-foreach($msg->getAttributes() as $attr){
-  if($attr->getType() === Attr::MESSAGE_INTEGRITY) break;
-
-  $test->addAttribute($attr);
-}
-
-$test = (string) $test;
-$test[3] = chr(ord($test[3]) + 24);
-$test = new Message($test);
-var_dump(bin2hex($msg->getAttribute(Attr::MESSAGE_INTEGRITY)->getData()));
-var_dump(hash_hmac('sha1', new Message($test), md5('nwnisworking:atlantis-software.net:password', true)));
+echo "Ans: ".(bin2hex($msg->getAttribute(Attr::MESSAGE_INTEGRITY)->getData())).PHP_EOL;
+// var_dump(bin2hex($test->getAttribute(Attr::MESSAGE_INTEGRITY)->getData()));
+// var_dump(hash_hmac('sha1', new Message($test), md5('nwnisworking:atlantis-software.net:password', true)));
