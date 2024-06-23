@@ -66,10 +66,13 @@ readonly class Attribute{
         $ip^= $mask;
         $port^= $mask;
 
-        return [
-          'protocol'=>$protocol, 
-          'address'=>new Address(inet_ntop($ip), ord($port[0]) << 8 | ord($port[1]))
-        ];
+        return new Address(inet_ntop($ip), ord($port[0]) << 8 | ord($port[1]));
+
+        // return new Address(inet_ntop($ip), ($port[0]) << 8 | ord($port[1]));
+        // return [
+        //   'protocol'=>$protocol, 
+        //   'address'=>new Address(inet_ntop($ip), ord($port[0]) << 8 | ord($port[1]))
+        // ];
       case Attr::DATA : 
         return new Message($this->raw_data);
 
@@ -134,6 +137,10 @@ readonly class Attribute{
 
   public static function Fingerprint(string $fingerprint): self{
     return new self(pack('nna*', Attr::FINGERPRINT->value, strlen($fingerprint), $fingerprint));
+  }
+
+  public static function Data(string $data): self{
+    return new self(pack('nna*', Attr::DATA->value, strlen($data), $data));
   }
 
   private static function XORAddress(Address $address, Message $message): string{

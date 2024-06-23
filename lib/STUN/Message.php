@@ -6,13 +6,13 @@ use STUN\Message\Method;
 use STUN\Message\Type;
 
 class Message{
-  private int $type;
+  private int $type = 0;
 
   private int $length = 0;
 
-  private string $cookie;
+  private string $cookie = '';
 
-  private string $id;
+  private string $id = '';
 
   /**
    * @var Attribute[]
@@ -20,7 +20,12 @@ class Message{
   private array $attributes = [];
 
   public function __construct(?string $data = null){
-    if(!$data) return;
+    if(!$data){
+      $this->cookie = hex2bin("2112a442");
+      $this->id = openssl_random_pseudo_bytes(12);
+
+      return;
+    }
 
     [
       'type'=>$type,
@@ -123,21 +128,22 @@ class Message{
     return null;
   }
 
-  // This is a working code, just that I need to find the use of it
-  public function integrity(string $password, ?string $user = null, ?string $realm = null): string{
-    $user??= $this->getAttribute(Attr::USERNAME)->getData() ?? '';
-    $realm??= $this->getAttribute(Attr::REALM)->getData() ?? '';
+  public static function integrity(string $password, self $msg): string{
+    $user = $msg->getAttribute(Attr::USERNAME)?->getData() ?? '';
+    $realm = $msg->getAttribute(Attr::REALM)?->getData() ?? '';
     $md5 = md5("$user:$realm:$password", true);
-    $msg = clone $this;
+
+    $attributes = $msg->getAttributes();
 
     $msg->removeAttributes();
 
-    foreach($this->getAttributes() as $attr){
-      if($attr->getType() === Attr::MESSAGE_INTEGRITY) break;
-      $msg->addAttribute($attr);
+    foreach($attributes as $attribute){
+      if($attribute->getType() === Attr::MESSAGE_INTEGRITY)
+        break;
+      $msg->addAttribute($attribute);
     }
 
-    $size = 24 + $msg->getLength();
+    $size = $msg->getLength() + 24;
     $msg = (string) $msg;
     $msg[2] = chr(($size >> 8) & 0xff);
     $msg[3] = chr($size & 0xff);
@@ -145,22 +151,57 @@ class Message{
     return hash_hmac('sha1', $msg, $md5, true);
   }
 
-  public function fingerprint(){
-    $msg = clone $this;
+  public static function fingerprint(self $msg): string{
+    $attributes = $msg->getAttributes();
     $msg->removeAttributes();
 
-    foreach($this->attributes as $attr){
-      if($attr->getType() === Attr::FINGERPRINT)
+    foreach($attributes as $attribute){
+      if($attribute->getType() === Attr::FINGERPRINT)
         break;
-      $msg->addAttribute($attr);
+
+      $msg->addAttribute($attribute);
     }
 
     $size = $msg->getLength() + 8;
-    $msg = (string) $this;
+    $msg = (string) $msg;
     $msg[2] = chr(($size >> 8) & 0xff);
     $msg[3] = chr($size & 0xff);
-    
+
     return pack('N', crc32($msg)) ^ 'STUN';
+  }
+
+  public function debug(): object{
+    $data = [
+    "type"=>$this->type,
+    "length"=>$this->length,
+    "cookie"=>bin2hex($this->cookie),
+    "id"=>bin2hex($this->id),
+    'attributes'=>[]
+    ];
+
+    foreach($this->attributes as $attr){
+      $attributes = &$data['attributes'];
+      $type = $attr->getType();
+      switch($type){
+        case Attr::XOR_MAPPED_ADDRESS : 
+        case Attr::XOR_RELAYED_ADDRESS : 
+        case Attr::XOR_PEER_ADDRESS : 
+          $attributes[$type->name] = (string) $attr->getData($this)['address'];
+        break;
+        case Attr::FINGERPRINT : 
+        case Attr::MESSAGE_INTEGRITY : 
+        case Attr::ICE_CONTROLLED : 
+        case Attr::ICE_CONTROLLING : 
+          $attributes[$type->name] = bin2hex($attr->getData($this));
+          break;
+
+        default : 
+          $attributes[$type->name] = $attr->getData($this);
+        break;
+      }
+    }
+
+    return (object)$data;
   }
 
   public function __tostring(){

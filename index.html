@@ -101,12 +101,70 @@
       }
     ]
 
-    const peer1 = new Peer(servers)
-    const peer2 = new Peer(servers)
+    // const peer1 = new Peer(servers)
+    // const peer2 = new Peer(servers)
 
-    const offer = await peer1.createChannel('test').offer()
-    const answer = await peer2.answer(offer)
+    // const offer = await peer1.createChannel('test').offer()
+    // const answer = await peer2.answer(offer)
     
+    const alice = new RTCPeerConnection({
+      iceTransportPolicy : "relay", 
+      iceServers : [{
+        urls : 'turn:127.0.0.1:9000', 
+        credential : 'password', 
+        username : 'nwnisworking'
+      }]
+    }),
+    bob = new RTCPeerConnection({
+      iceTransportPolicy : 'relay',
+      iceServers : [{
+        urls : 'turn:127.0.0.1:9000',
+        credential : 'password',
+        username : 'nwnisworking'
+      }]
+    })
+
+    alice.onconnectionstatechange = 
+    alice.ondatachannel = 
+    alice.onicecandidate = 
+    alice.onicecandidateerror = 
+    alice.oniceconnectionstatechange = 
+    alice.onicegatheringstatechange = 
+    alice.onnegotiationneeded = 
+    alice.onsignalingstatechange = 
+    alice.ontrack = 
+    bob.onconnectionstatechange = 
+    bob.ondatachannel = 
+    bob.onicecandidate = 
+    bob.onicecandidateerror = 
+    bob.oniceconnectionstatechange = 
+    bob.onicegatheringstatechange = 
+    bob.onnegotiationneeded = 
+    bob.onsignalingstatechange = 
+    bob.ontrack = 
+    console.log
+
+    alice.createDataChannel('test')
+
+    let data = await alice.createOffer().then(offer=>(
+      alice.setLocalDescription(offer), 
+      new Promise((res, rej)=>{
+        const c = []
+        alice.onicecandidate = e=>e.candidate ? c.push(e.candidate) : res({candidates : c, offer})
+      })
+    ))
+
+    bob.setRemoteDescription(data.offer)
+    bob.addIceCandidate(data.candidates[0], console.log, console.log)    
+    
+    data = await bob.createAnswer().then(answer=>(
+      bob.setLocalDescription(answer),
+      new Promise((res, rej)=>{
+        const c = []
+        bob.onicecandidate = e=>e.candidate ? c.push(e.candidate) : res({candidates : c, answer})
+      })
+    ))
+
   </script>
 </body>
 </html>

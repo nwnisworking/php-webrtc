@@ -3,14 +3,8 @@ use STUN\Message;
 use STUN\Message\Attr;
 use STUN\Message\Method;
 use STUN\Message\Type;
+use STUN\Server;
 use STUN\Attribute;
-
-function generateEphemeralPort() {
-  $minEphemeralPort = 49152;
-  $maxEphemeralPort = 65535;
-
-  return rand($minEphemeralPort, $maxEphemeralPort);
-} 
 
 define('DS', DIRECTORY_SEPARATOR);
 define('BASE_PATH', __DIR__);
@@ -21,117 +15,202 @@ require_once LIB_PATH.DS.'Autoload.php';
 Autoload::load(LIB_PATH);
 spl_autoload_register([Autoload::class, 'register']);
 
-$master = new Sock(new Address('127.0.0.1', 9000), 'udp');
-$master
-->setReuseAddr(true)
-->setBlock()
-->bind();
+$i = -1;
 
-$sockets = [];
+function logger(string $text){
+  global $log;
 
-$sockets[] = [
-  'socket'=>$master,
-  'user_address'=>null,
-  'expires'=>null
-];
+  if($log === $text)
+    return;
 
-$i = 0;
-function &s_log(string $str){
-  static $logs = [];
+  $log = $text;
 
-  if(isset($logs[0]) && $logs[array_key_last($logs)] === $str)
-    return $logs;
-
-  $logs[] = $str;
-
-  echo $str.PHP_EOL;
-  return $logs;
+  echo $text.PHP_EOL;
 }
+
+$server = new Server(new Address('127.0.0.1', 9000));
+
 while(1){
   $i++;
-  $i%= count($sockets);
+  $i%= count($server->sockets);
 
-  [
-    'socket'=>$socket,
-    'user_address'=>$user_address,
-    'expires'=>$expires
-  ] = $sockets[$i];
+  $socket = $server->sockets[$i];
 
-  s_log('Total sockets: '.count($sockets));
-
-  if(!is_null($expires) && time() > $expires){
-    array_splice($sockets, $i, 1);
-    $i--;
+  if(
+    empty($data = $socket->read($addr)) || 
+    ($msg = new Message($data)) && $msg->getClass() === Type::RESPONSE
+  )
     continue;
-  }
-
-  if(!$socket || empty($data = $socket->read($addr)))
-    continue;
-
-  $msg = new Message($data);
-  $res = clone $msg;
-  $res->setClass(Type::RESPONSE);
 
   switch($msg->getMethod()){
     case Method::BINDING : 
-      if($res->getAttribute(Attr::XOR_MAPPED_ADDRESS)){
-        $res->removeAttributes();
-      
-        $res->addAttribute(
-          // Attribute::Software(),
+      $reply = clone $msg;
+      $reply
+      ->setClass(Type::RESPONSE)
+      ->removeAttributes()
+      ->addAttribute(Attribute::XORMappedAddress($addr, $reply));
+
+      if($msg->getAttribute(Attr::USERNAME)){
+        $reply->addAttribute(Attribute::MessageIntegrity(Message::integrity('password', $reply)));
+        $reply->addAttribute(Attribute::Fingerprint(Message::fingerprint($reply)));
+
+        $p_addr = $server->find($addr);
+        $msg = new Message;
+        $msg
+        ->setClass(Type::INDICATION)
+        ->setMethod(Method::DATA);
+
+        # send to socket  
+        $msg->addAttribute(
+          Attribute::XORPeerAddress($socket->pair->relayAddress(), $msg),
+          Attribute::Data($reply)
         );
+
+        $socket->send($reply, $addr);
+        $server->sockets[0]->send($msg, $socket->user_address);
+        logger($socket->user_address);
       }
-
-      
-      $res->addAttribute(Attribute::XORMappedAddress($addr, $res));
-
+      else
+        $socket->send($reply, $addr);
       break;
     case Method::ALLOCATE : 
-      $res->removeAttributes();
-      $relay = new Sock(new Address($addr->ip), 'udp');
-      $relay->setReuseAddr(true)->setBlock()->bind();
+      $reply = clone $msg;
+      $relay = $server->allocate($addr);
 
-      $res->addAttribute(
-        Attribute::XORRelayedAddress($relay->getAddress(), $res),
-        Attribute::Lifetime(600),
-        Attribute::XORMappedAddress($addr, $res),
-        Attribute::Software('php-webrtc')
+      $reply
+      ->setClass(Type::RESPONSE)
+      ->removeAttributes()
+      ->addAttribute(
+        Attribute::XORRelayedAddress($relay->sock->getAddress(), $reply),
+        Attribute::Lifetime($relay->expires),
+        Attribute::Software('php-webrtc'),
+        Attribute::XORMappedAddress($addr, $reply)
       );
 
-      $sockets[] = [
-        'socket'=>$relay,
-        'user_address'=>$addr,
-        'expires'=>time() + 600
-      ];
-      break;
-    case Method::REFRESH : 
-      $res->removeAttributes();
+      logger('[Allocate] '.$relay->sock->getAddress().'[R] allocated to '.$relay->user_address.'[M]');
 
-      s_log('refresh');
-
-      foreach($sockets as &$meta){
-        if($meta['user_address'] == $addr)
-          $meta['expires'] = 0;
-      }
+      $socket->send($reply, $addr);
       break;
     case Method::CREATE_PERMISSION : 
-      $res->removeAttributes();
-      $res->addAttribute(Attribute::Software('php-webrtc'));
+      $reply = clone $msg;
+      $reply
+      ->setClass(Type::RESPONSE)
+      ->removeAttributes()
+      ->addAttribute(Attribute::Software('php-webrtc'));
+
+      $remote = $server->find($msg->getAttribute(Attr::XOR_PEER_ADDRESS)->getData($msg));
+      $local = $server->find($addr);
+
+      $remote = $remote->current();
+      $local = $local->current();
+      $remote->pair = $local;
+      $local->pair = $remote;
+
+      logger('[Permission] '.$local->sock->getAddress() .'[R] Paired with '.$remote->sock->getAddress().'[R]');
+
+      $socket->send($reply, $addr);
       break;
+
     case Method::SEND : 
-      $peer = $res->getAttribute(Attr::XOR_PEER_ADDRESS)->getData($res);
-      $res = $res->getAttribute(Attr::DATA)->getData($res);
+      $remote = $server->find($msg->getAttribute(Attr::XOR_PEER_ADDRESS)->getData($msg));
+      $data = $msg->getAttribute(Attr::DATA)->getData($msg);
 
-      foreach($sockets as $sock){
-        if($sock['user_address'] == $addr){
-          $socket = $sock['socket'];
-          $addr = $peer['address'];
-          break;
-        }
-      }
+      $remote = $remote->current();
 
+      $remote->pair->send($data, $remote->relayAddress());
+
+      logger('[Send] '.$addr.'[M] sent to '.$remote->user_address.'[M]');
+      break;
+    case Method::DATA : 
+      var_dump($msg);
       break;
   }
 
-  $socket->send($res, $addr);
 }
+
+//   switch($msg->getMethod()){
+//     case Method::BINDING : 
+//       $reply = clone $msg;
+
+//       if($msg->getAttribute(Attr::USERNAME)){
+//         $reply->addAttribute(Attribute::MessageIntegrity(Message::integrity('password', $reply)));
+//         $reply->addAttribute(Attribute::Fingerprint(Message::fingerprint($reply)));
+//         $sock = $sockets[find($addr, true)];
+
+//         $msg = new Message;
+//         $msg
+//         ->setClass(Type::INDICATION)
+//         ->setMethod(Method::DATA);
+
+//         logger("[Bind] Data sent from $user_address to $sock[user_address]");
+//       }
+
+//       $socket->send($reply, $addr);
+
+//       break;
+//     #region alloc
+//     case Method::ALLOCATE : 
+//       $reply = clone $msg;
+//       $relay = new Sock(new Address($addr->ip), 'udp');
+      
+//       $relay
+//       ->setReuseAddr(true)
+//       ->setBlock()
+//       ->bind();
+
+//       $reply
+//       ->setClass(Type::RESPONSE)
+//       ->removeAttributes()
+//       ->addAttribute(
+//         Attribute::XORRelayedAddress($relay->getAddress(), $reply),
+//         Attribute::Lifetime(600),
+//         Attribute::Software('php-webrtc'),
+//         Attribute::XORMappedAddress($addr, $reply)
+//       );
+
+//       $sockets[] = [
+//         'socket'=>$relay,
+//         'user_address'=>$addr,
+//         'expires'=>time() + 600,
+//         'pair'=>null
+//       ];
+
+//       logger("[Allocate] ".$relay->getAddress()."[R] allocated to $addr");
+//       $socket->send($reply, $addr);
+
+//       break;
+//       #endregion alloc
+
+//       case Method::CREATE_PERMISSION : 
+//         $reply = clone $msg;
+//         $reply
+//         ->removeAttributes()
+//         ->addAttribute(Attribute::Software('php-webrtc'));
+
+//         $peer_addr = $msg->getAttribute(Attr::XOR_PEER_ADDRESS)->getData($msg);
+//         $remote = find($peer_addr['address']);
+//         $local = find($addr);
+//         var_dump($remote, $local);
+
+//         $sockets[$local]['pair'] = [...$sockets[$remote]];
+//         $sockets[$remote]['pair'] = [...$sockets[$local]];
+
+
+//         // logger("[Permission] Peer: ".$local['socket']->getAddress().'[R] paired with '.$peer['socket']->getAddress().'[R]');
+
+//         break;
+//       case Method::SEND : 
+//         $sock = find($addr);
+//         $data = $msg->getAttribute(Attr::DATA)->getData($msg);
+//         $peer = $msg->getAttribute(Attr::XOR_PEER_ADDRESS)->getData($msg)['address'];
+
+
+//         // if($log !== "[Send] Data sent from $addr to ".$sock['pair']['user_address']." PEER $peer"){
+//         //   echo $log = "[Send] Data sent from $addr to ".$sock['pair']['user_address']." PEER $peer";
+//         //   echo PHP_EOL;
+//         // }
+
+//         // $sock['socket']->send($data, $sock['pair']['socket']->getAddress());
+//         break;
+//   }
+// }

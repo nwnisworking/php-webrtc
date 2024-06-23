@@ -1,5 +1,5 @@
 <?php
-class Sock{
+class Sock implements JsonSerializable{
   private Socket $socket;
 
   private Address $address;
@@ -72,4 +72,11 @@ class Sock{
     return socket_sendto($this->socket, $data, strlen($data), 0, $addr->ip, $addr->port);
   }
 
+  public function jsonSerialize(){
+    return $this->address;
+  }
+
+  public function __tostring(){
+    return (string)$this->address;
+  }
 }
